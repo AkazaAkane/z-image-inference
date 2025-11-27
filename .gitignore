@@ -9,5 +9,8 @@ wheels/
 # Virtual environments
 .venv
 
-#
+# IDE
 .idea
+
+# Generated files
+history.db

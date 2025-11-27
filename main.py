@@ -1,13 +1,74 @@
-import os
-os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
-
+import io
+import base64
 import random
-import torch
-import gradio as gr
-from diffusers import ZImagePipeline
+import sqlite3
+from pathlib import Path
 
-pipe = None
-history = []
+import requests
+import gradio as gr
+from PIL import Image
+
+# 配置
+DB_PATH = Path(__file__).parent / "history.db"
+MODEL_SERVER_URL = "http://127.0.0.1:8000"
+
+history_detail = []  # for history tab: [(image, prompt, seed, width, height, steps), ...]
+
+
+def init_db():
+    """初始化数据库"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            image_data BLOB NOT NULL,
+            prompt TEXT,
+            seed INTEGER,
+            width INTEGER,
+            height INTEGER,
+            steps INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def load_history():
+    """从数据库加载历史记录"""
+    global history_detail
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT image_data, prompt, seed, width, height, steps FROM images ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+
+    history_detail = []
+    for row in rows:
+        img = Image.open(io.BytesIO(row[0]))
+        history_detail.append({
+            "image": img,
+            "prompt": row[1] or "",
+            "seed": row[2],
+            "width": row[3],
+            "height": row[4],
+            "steps": row[5],
+        })
+
+
+def save_to_db(image, prompt, seed, width, height, steps):
+    """保存图片到数据库"""
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    image_data = buffer.getvalue()
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO images (image_data, prompt, seed, width, height, steps) VALUES (?, ?, ?, ?, ?, ?)",
+        (image_data, prompt, seed, width, height, steps)
+    )
+    conn.commit()
+    conn.close()
 
 RESOLUTION_OPTIONS = {
     "512": {
@@ -61,21 +122,6 @@ EXAMPLE_PROMPTS = [
 ]
 
 
-def load_model():
-    global pipe
-    if pipe is None:
-        print("Loading model...")
-        pipe = ZImagePipeline.from_pretrained(
-            "Tongyi-MAI/Z-Image-Turbo",
-            torch_dtype=torch.float32,
-            low_cpu_mem_usage=False,
-        )
-        pipe.to(torch.device("mps"))
-        pipe.enable_attention_slicing()
-        print("Model loaded!")
-    return pipe
-
-
 def update_resolution_choices(category):
     choices = list(RESOLUTION_OPTIONS.get(category, {}).keys())
     return gr.update(choices=choices, value=choices[0] if choices else None)
@@ -84,8 +130,6 @@ def update_resolution_choices(category):
 def generate_image(prompt, res_category, resolution, seed, random_seed, steps):
     if not prompt:
         raise gr.Error("请输入 Prompt")
-
-    model = load_model()
 
     # 处理种子
     if random_seed:
@@ -96,25 +140,57 @@ def generate_image(prompt, res_category, resolution, seed, random_seed, steps):
     # 获取分辨率
     width, height = RESOLUTION_OPTIONS.get(res_category, {}).get(resolution, (1024, 1024))
 
-    generator = torch.Generator("mps").manual_seed(seed)
-    image = model(
-        prompt=prompt,
-        height=height,
-        width=width,
-        num_inference_steps=int(steps),
-        guidance_scale=0.0,
-        max_sequence_length=512,
-        generator=generator,
-    ).images[0]
+    # 调用模型服务
+    try:
+        resp = requests.post(
+            f"{MODEL_SERVER_URL}/generate",
+            json={
+                "prompt": prompt,
+                "width": width,
+                "height": height,
+                "steps": int(steps),
+                "seed": seed,
+            },
+            timeout=300,
+        )
+        resp.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        raise gr.Error("模型服务未启动，请先运行: uv run python model_server.py")
+    except requests.exceptions.RequestException as e:
+        raise gr.Error(f"请求失败: {e}")
 
-    history.insert(0, (image, f"seed: {seed}"))
-    torch.mps.empty_cache()
+    data = resp.json()
+    image_bytes = base64.b64decode(data["image_base64"])
+    image = Image.open(io.BytesIO(image_bytes))
 
-    return image, str(seed), history
+    # 保存到数据库
+    save_to_db(image, prompt, seed, width, height, int(steps))
+
+    # 更新内存中的历史记录
+    history_detail.insert(0, {
+        "image": image,
+        "prompt": prompt,
+        "seed": seed,
+        "width": width,
+        "height": height,
+        "steps": int(steps),
+    })
+
+    return image, str(seed)
 
 
-def get_history():
-    return history
+def get_history_gallery():
+    """返回 history tab 的 gallery 数据"""
+    return [(d["image"], f"seed: {d['seed']}") for d in history_detail]
+
+
+def on_history_select(evt: gr.SelectData):
+    """当在 history gallery 中选中一张图片时"""
+    if evt.index < len(history_detail):
+        item = history_detail[evt.index]
+        info = f"Seed: {item['seed']}  |  {item['width']}x{item['height']}  |  Steps: {item['steps']}"
+        return item["image"], item["prompt"], info
+    return None, "", ""
 
 
 with gr.Blocks(title="Z-Image-Turbo") as demo:
@@ -135,12 +211,12 @@ with gr.Blocks(title="Z-Image-Turbo") as demo:
                         res_category = gr.Dropdown(
                             label="Resolution Category",
                             choices=["512", "768", "1024", "1280"],
-                            value="1024",
+                            value="512",
                         )
                         resolution = gr.Dropdown(
                             label="Resolution",
-                            choices=list(RESOLUTION_OPTIONS["1024"].keys()),
-                            value="1024x1024 (1:1)",
+                            choices=list(RESOLUTION_OPTIONS["512"].keys()),
+                            value="368x640 (9:16)",
                         )
 
                     with gr.Row():
@@ -168,10 +244,15 @@ with gr.Blocks(title="Z-Image-Turbo") as demo:
                 with gr.Column(scale=1):
                     output_image = gr.Image(label="Generated Image", type="pil")
                     seed_used = gr.Textbox(label="Seed Used", interactive=False)
-                    gen_gallery = gr.Gallery(label="History", columns=4, height="auto")
 
         with gr.TabItem("History") as history_tab:
-            history_gallery = gr.Gallery(label="History", columns=4, height="auto")
+            with gr.Row():
+                with gr.Column(scale=1):
+                    history_gallery = gr.Gallery(label="History", columns=3, height=400)
+                with gr.Column(scale=1):
+                    preview_image = gr.Image(label="Preview", type="pil")
+                    preview_info = gr.Textbox(label="Info", interactive=False)
+                    preview_prompt = gr.Textbox(label="Prompt", lines=5, interactive=False)
 
     # 事件绑定
     res_category.change(
@@ -183,11 +264,19 @@ with gr.Blocks(title="Z-Image-Turbo") as demo:
     generate_btn.click(
         fn=generate_image,
         inputs=[prompt, res_category, resolution, seed, random_seed, steps],
-        outputs=[output_image, seed_used, gen_gallery],
+        outputs=[output_image, seed_used],
     )
 
     # History tab 切换时刷新
-    history_tab.select(fn=get_history, outputs=[history_gallery])
+    history_tab.select(fn=get_history_gallery, outputs=[history_gallery])
+
+    # History gallery 选中图片时显示详情
+    history_gallery.select(
+        fn=on_history_select,
+        outputs=[preview_image, preview_prompt, preview_info],
+    )
 
 if __name__ == "__main__":
+    init_db()
+    load_history()
     demo.launch()

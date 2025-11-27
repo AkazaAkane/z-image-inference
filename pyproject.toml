@@ -10,4 +10,7 @@ dependencies = [
     "diffusers @ git+https://github.com/huggingface/diffusers",
     "transformers",
     "accelerate",
+    "fastapi",
+    "uvicorn",
+    "requests",
 ]
