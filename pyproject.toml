@@ -13,4 +13,6 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "requests",
+    "openai",
+    "python-dotenv",
 ]

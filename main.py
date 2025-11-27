@@ -4,15 +4,21 @@ import random
 import sqlite3
 from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import requests
 import gradio as gr
 from PIL import Image
+
+from grok_client import GrokClient
 
 # 配置
 DB_PATH = Path(__file__).parent / "history.db"
 MODEL_SERVER_URL = "http://127.0.0.1:8000"
 
 history_detail = []  # for history tab: [(image, prompt, seed, width, height, steps), ...]
+grok_client = GrokClient()
 
 
 def init_db():
@@ -69,6 +75,37 @@ def save_to_db(image, prompt, seed, width, height, steps):
     )
     conn.commit()
     conn.close()
+
+
+def delete_from_db_by_index(index: int):
+    """根据索引删除单张图片（索引对应 history_detail 的顺序）"""
+    global history_detail
+    if index < 0 or index >= len(history_detail):
+        return False
+
+    conn = sqlite3.connect(DB_PATH)
+    # history_detail 是按 created_at DESC 排序的，获取所有 id
+    rows = conn.execute("SELECT id FROM images ORDER BY created_at DESC").fetchall()
+    if index < len(rows):
+        image_id = rows[index][0]
+        conn.execute("DELETE FROM images WHERE id = ?", (image_id,))
+        conn.commit()
+    conn.close()
+
+    # 从内存中删除
+    history_detail.pop(index)
+    return True
+
+
+def clear_all_history():
+    """清空所有历史记录"""
+    global history_detail
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM images")
+    conn.commit()
+    conn.close()
+    history_detail = []
+
 
 RESOLUTION_OPTIONS = {
     "512": {
@@ -127,20 +164,15 @@ def update_resolution_choices(category):
     return gr.update(choices=choices, value=choices[0] if choices else None)
 
 
-def generate_image(prompt, res_category, resolution, seed, random_seed, steps):
-    if not prompt:
-        raise gr.Error("请输入 Prompt")
-
-    # 处理种子
+def generate_image_internal(prompt, res_category, resolution, seed, random_seed, steps):
+    """内部图片生成函数"""
     if random_seed:
         seed = random.randint(0, 2147483647)
     else:
         seed = int(seed)
 
-    # 获取分辨率
     width, height = RESOLUTION_OPTIONS.get(res_category, {}).get(resolution, (1024, 1024))
 
-    # 调用模型服务
     try:
         resp = requests.post(
             f"{MODEL_SERVER_URL}/generate",
@@ -163,10 +195,8 @@ def generate_image(prompt, res_category, resolution, seed, random_seed, steps):
     image_bytes = base64.b64decode(data["image_base64"])
     image = Image.open(io.BytesIO(image_bytes))
 
-    # 保存到数据库
     save_to_db(image, prompt, seed, width, height, int(steps))
 
-    # 更新内存中的历史记录
     history_detail.insert(0, {
         "image": image,
         "prompt": prompt,
@@ -179,6 +209,103 @@ def generate_image(prompt, res_category, resolution, seed, random_seed, steps):
     return image, str(seed)
 
 
+def chat_and_generate(user_message, chat_history, res_category, resolution, seed, random_seed, steps):
+    """流式输出 Grok 回复，完成后自动生成图片"""
+    if not user_message.strip():
+        yield chat_history, None, "", user_message
+        return
+
+    if chat_history is None:
+        chat_history = []
+
+    # 添加用户消息
+    chat_history.append({"role": "user", "content": user_message})
+    chat_history.append({"role": "assistant", "content": ""})
+
+    # 流式输出 Grok 回复
+    generated_prompt = ""
+    try:
+        for chunk in grok_client.chat_stream(user_message):
+            generated_prompt += chunk
+            chat_history[-1]["content"] = generated_prompt
+            yield chat_history, None, "生成提示词中...", ""
+    except Exception as e:
+        chat_history[-1]["content"] = f"Grok API 错误: {e}"
+        yield chat_history, None, "", ""
+        return
+
+    # 流式输出完成，开始生成图片
+    yield chat_history, None, "生成图片中...", ""
+
+    try:
+        image, seed_used = generate_image_internal(
+            generated_prompt, res_category, resolution, seed, random_seed, steps
+        )
+    except gr.Error as e:
+        yield chat_history, None, str(e), ""
+        return
+
+    yield chat_history, image, seed_used, ""
+
+
+def clear_chat():
+    """清空对话历史"""
+    grok_client.clear_history()
+    return [], None, ""
+
+
+def regenerate_after_edit(chat_history, res_category, resolution, seed, random_seed, steps):
+    """编辑消息后重新生成"""
+    if not chat_history:
+        yield chat_history, None, ""
+        return
+
+    # 找到最后一条用户消息
+    last_user_idx = None
+    for i in range(len(chat_history) - 1, -1, -1):
+        if chat_history[i].get("role") == "user":
+            last_user_idx = i
+            break
+
+    if last_user_idx is None:
+        yield chat_history, None, ""
+        return
+
+    user_message = chat_history[last_user_idx]["content"]
+
+    # 添加 assistant 占位
+    chat_history.append({"role": "assistant", "content": ""})
+
+    # 流式输出 Grok 回复
+    generated_prompt = ""
+    try:
+        for chunk in grok_client.chat_stream(user_message):
+            generated_prompt += chunk
+            chat_history[-1]["content"] = generated_prompt
+            yield chat_history, None, "生成提示词中..."
+    except Exception as e:
+        chat_history[-1]["content"] = f"Grok API 错误: {e}"
+        yield chat_history, None, ""
+        return
+
+    yield chat_history, None, "生成图片中..."
+
+    try:
+        image, seed_used = generate_image_internal(
+            generated_prompt, res_category, resolution, seed, random_seed, steps
+        )
+    except gr.Error as e:
+        yield chat_history, None, str(e)
+        return
+
+    yield chat_history, image, seed_used
+
+
+def fill_example(example_text):
+    """将示例填入输入框"""
+    return example_text
+
+
 def get_history_gallery():
     """返回 history tab 的 gallery 数据"""
     return [(d["image"], f"seed: {d['seed']}") for d in history_detail]
@@ -189,11 +316,51 @@ def on_history_select(evt: gr.SelectData):
     if evt.index < len(history_detail):
         item = history_detail[evt.index]
         info = f"Seed: {item['seed']}  |  {item['width']}x{item['height']}  |  Steps: {item['steps']}"
-        return item["image"], item["prompt"], info
-    return None, "", ""
+        return item["image"], item["prompt"], info, evt.index
+    return None, "", "", -1
+
+
+def on_delete_selected(selected_index: int):
+    """删除选中的图片"""
+    if selected_index < 0:
+        gr.Warning("请先选择要删除的图片")
+        return get_history_gallery(), None, "", "", -1
+
+    if delete_from_db_by_index(selected_index):
+        gr.Info("图片已删除")
+    return get_history_gallery(), None, "", "", -1
+
+
+def on_clear_all_history():
+    """清空所有历史"""
+    clear_all_history()
+    gr.Info("已清空所有历史记录")
+    return get_history_gallery(), None, "", "", -1
 
 
 with gr.Blocks(title="Z-Image-Turbo") as demo:
+    gr.HTML("""
+    <style>
+    /* Gradio 6.x Chatbot 气泡宽度 - 全局选择器 */
+    .bubble-wrap .message-row.bubble {
+        max-width: 100% !important;
+    }
+    .bubble-wrap .message {
+        max-width: 100% !important;
+    }
+    .bubble-wrap .flex-wrap {
+        max-width: 100% !important;
+    }
+    /* 隐藏 History Gallery 的选中效果 */
+    .history-gallery .thumbnail-item.selected {
+        border-color: transparent !important;
+        outline: none !important;
+    }
+    .history-gallery .thumbnail-item:focus {
+        outline: none !important;
+    }
+    </style>
+    """)
     gr.Markdown("# Z-Image-Turbo\n*An Efficient Image Generation Foundation Model with Single-Stream Diffusion Transformer*")
 
     with gr.Tabs():
@@ -201,11 +368,21 @@ with gr.Blocks(title="Z-Image-Turbo") as demo:
             with gr.Row():
                 # 左侧控制面板
                 with gr.Column(scale=1):
-                    prompt = gr.Textbox(
-                        label="Prompt",
-                        placeholder="Enter your prompt here...",
-                        lines=3,
+                    chatbot = gr.Chatbot(
+                        label="对话（双击用户消息可编辑）",
+                        height=300,
+                        editable="user",
+                        layout="panel",
                     )
+
+                    user_input = gr.Textbox(
+                        placeholder="描述你想要的图片...",
+                        lines=2,
+                        show_label=False,
+                    )
+                    with gr.Row():
+                        send_btn = gr.Button("发送", variant="primary", scale=1)
+                        clear_btn = gr.Button("清空对话", scale=1)
 
                     with gr.Row():
                         res_category = gr.Dropdown(
@@ -231,14 +408,12 @@ with gr.Blocks(title="Z-Image-Turbo") as demo:
                         label="Steps",
                     )
 
-                    generate_btn = gr.Button("Generate", variant="primary")
-
-                    gr.Markdown("### Example Prompts")
-                    examples = gr.Examples(
-                        examples=[[p] for p in EXAMPLE_PROMPTS],
-                        inputs=[prompt],
-                        label="Examples",
-                    )
+                    gr.Markdown("### 示例 (点击填入输入框)")
+                    with gr.Row():
+                        for i, example in enumerate(EXAMPLE_PROMPTS):
+                            short_label = example[:20] + "..." if len(example) > 20 else example
+                            btn = gr.Button(short_label, size="sm")
+                            btn.click(fn=lambda e=example: e, outputs=[user_input])
 
                 # 右侧图片展示
                 with gr.Column(scale=1):
@@ -247,12 +422,16 @@ with gr.Blocks(title="Z-Image-Turbo") as demo:
 
         with gr.TabItem("History") as history_tab:
             with gr.Row():
+                clear_all_btn = gr.Button("清空全部历史", variant="stop", size="sm")
+            with gr.Row():
                 with gr.Column(scale=1):
-                    history_gallery = gr.Gallery(label="History", columns=3, height=400)
+                    history_gallery = gr.Gallery(label="History", columns=3, height=400, preview=False,allow_preview=False)
                 with gr.Column(scale=1):
                     preview_image = gr.Image(label="Preview", type="pil")
                     preview_info = gr.Textbox(label="Info", interactive=False)
                     preview_prompt = gr.Textbox(label="Prompt", lines=5, interactive=False)
+                    delete_btn = gr.Button("删除此图", variant="secondary")
+                    selected_index = gr.State(value=-1)
 
     # 事件绑定
     res_category.change(
@@ -261,10 +440,52 @@ with gr.Blocks(title="Z-Image-Turbo") as demo:
         outputs=[resolution],
     )
 
-    generate_btn.click(
-        fn=generate_image,
-        inputs=[prompt, res_category, resolution, seed, random_seed, steps],
-        outputs=[output_image, seed_used],
+    # 发送消息 → Grok 生成 prompt → 自动生成图片
+    send_btn.click(
+        fn=chat_and_generate,
+        inputs=[user_input, chatbot, res_category, resolution, seed, random_seed, steps],
+        outputs=[chatbot, output_image, seed_used, user_input],
+    )
+
+    # 支持回车发送
+    user_input.submit(
+        fn=chat_and_generate,
+        inputs=[user_input, chatbot, res_category, resolution, seed, random_seed, steps],
+        outputs=[chatbot, output_image, seed_used, user_input],
+    )
+
+    # 清空对话
+    clear_btn.click(
+        fn=clear_chat,
+        outputs=[chatbot, output_image, seed_used],
+    )
+
+    # 编辑消息后重新生成
+    def on_edit(chat_history, evt: gr.EditData):
+        """处理编辑事件：截断历史"""
+        row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+
+        # 只处理用户消息
+        if row_idx >= len(chat_history) or chat_history[row_idx].get("role") != "user":
+            return chat_history
+
+        # 截断到编辑的消息（保留该消息，更新内容）
+        truncated = chat_history[:row_idx + 1]
+        truncated[row_idx]["content"] = evt.value
+
+        # 同步截断 GrokClient 的历史
+        grok_client.history = grok_client.history[:row_idx]
+
+        return truncated
+
+    chatbot.edit(
+        fn=on_edit,
+        inputs=[chatbot],
+        outputs=[chatbot],
+    ).then(
+        fn=regenerate_after_edit,
+        inputs=[chatbot, res_category, resolution, seed, random_seed, steps],
+        outputs=[chatbot, output_image, seed_used],
     )
 
     # History tab 切换时刷新
@@ -273,7 +494,20 @@ with gr.Blocks(title="Z-Image-Turbo") as demo:
     # History gallery 选中图片时显示详情
     history_gallery.select(
         fn=on_history_select,
-        outputs=[preview_image, preview_prompt, preview_info],
+        outputs=[preview_image, preview_prompt, preview_info, selected_index],
+    )
+
+    # 删除选中的图片
+    delete_btn.click(
+        fn=on_delete_selected,
+        inputs=[selected_index],
+        outputs=[history_gallery, preview_image, preview_prompt, preview_info, selected_index],
+    )
+
+    # 清空全部历史
+    clear_all_btn.click(
+        fn=on_clear_all_history,
+        outputs=[history_gallery, preview_image, preview_prompt, preview_info, selected_index],
     )
 
 if __name__ == "__main__":
