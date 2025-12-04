@@ -171,6 +171,7 @@ z-image-inference/
 - [Tongyi Lab](https://huggingface.co/Tongyi-MAI) for Z-Image-Turbo model
 - [Hugging Face](https://huggingface.co/docs/diffusers) for diffusers library
 - [Gradio](https://gradio.app/) for the web interface framework
+- [z-image-mps](https://github.com/ivanfioravanti/z-image-mps) for MPS optimization inspiration
 
 ## License
 
@@ -265,6 +266,7 @@ uv run python main.py
 - [通义实验室](https://huggingface.co/Tongyi-MAI) 的 Z-Image-Turbo 模型
 - [Hugging Face](https://huggingface.co/docs/diffusers) 的 diffusers 库
 - [Gradio](https://gradio.app/) Web 界面框架
+- [z-image-mps](https://github.com/ivanfioravanti/z-image-mps) 提供 MPS 性能优化灵感
 
 ## 许可证
 
