@@ -21,7 +21,7 @@ def load_model():
         print("Loading model...")
         pipe = ZImagePipeline.from_pretrained(
             "Tongyi-MAI/Z-Image-Turbo",
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             low_cpu_mem_usage=False,
         )
         # VAE 用 float32 避免 bfloat16 导致的 NaN 问题

@@ -301,6 +301,20 @@ def regenerate_after_edit(chat_history, res_category, resolution, seed, random_s
     yield chat_history, image, seed_used
 
 
+def direct_generate(prompt, res_category, resolution, seed, random_seed, steps):
+    """直接使用 prompt 生成图片"""
+    if not prompt.strip():
+        return None, ""
+
+    try:
+        image, seed_used = generate_image_internal(
+            prompt, res_category, resolution, seed, random_seed, steps
+        )
+        return image, seed_used
+    except gr.Error as e:
+        raise e
+
+
 def fill_example(example_text):
     """将示例填入输入框"""
     return example_text
@@ -368,21 +382,34 @@ with gr.Blocks(title="Z-Image-Turbo") as demo:
             with gr.Row():
                 # 左侧控制面板
                 with gr.Column(scale=1):
-                    chatbot = gr.Chatbot(
-                        label="对话（双击用户消息可编辑）",
-                        height=300,
-                        editable="user",
-                        layout="panel",
-                    )
+                    with gr.Tabs(selected="direct_tab" if not grok_client.available else "chat_tab") as input_tabs:
+                        with gr.TabItem(
+                            "Chat 模式" + ("" if grok_client.available else "（未配置 API Key）"),
+                            id="chat_tab",
+                            interactive=grok_client.available,
+                        ):
+                            chatbot = gr.Chatbot(
+                                label="对话（双击用户消息可编辑）",
+                                height=300,
+                                editable="user",
+                                layout="panel",
+                            )
+                            user_input = gr.Textbox(
+                                placeholder="描述你想要的图片...",
+                                lines=2,
+                                show_label=False,
+                            )
+                            with gr.Row():
+                                send_btn = gr.Button("发送", variant="primary", scale=1)
+                                clear_btn = gr.Button("清空对话", scale=1)
 
-                    user_input = gr.Textbox(
-                        placeholder="描述你想要的图片...",
-                        lines=2,
-                        show_label=False,
-                    )
-                    with gr.Row():
-                        send_btn = gr.Button("发送", variant="primary", scale=1)
-                        clear_btn = gr.Button("清空对话", scale=1)
+                        with gr.TabItem("直接输入 Prompt", id="direct_tab"):
+                            direct_prompt = gr.Textbox(
+                                label="Prompt",
+                                placeholder="输入完整的图片生成 prompt...",
+                                lines=10,
+                            )
+                            direct_generate_btn = gr.Button("生成图片", variant="primary")
 
                     with gr.Row():
                         res_category = gr.Dropdown(
@@ -409,11 +436,12 @@ with gr.Blocks(title="Z-Image-Turbo") as demo:
                     )
 
                     gr.Markdown("### 示例 (点击填入输入框)")
+                    example_buttons = []
                     with gr.Row():
                         for i, example in enumerate(EXAMPLE_PROMPTS):
                             short_label = example[:20] + "..." if len(example) > 20 else example
                             btn = gr.Button(short_label, size="sm")
-                            btn.click(fn=lambda e=example: e, outputs=[user_input])
+                            example_buttons.append((btn, example))
 
                 # 右侧图片展示
                 with gr.Column(scale=1):
@@ -434,30 +462,49 @@ with gr.Blocks(title="Z-Image-Turbo") as demo:
                     selected_index = gr.State(value=-1)
 
     # 事件绑定
+
+    # 示例按钮点击事件（同时填入两个输入框）
+    for btn, example in example_buttons:
+        btn.click(fn=lambda e=example: (e, e), outputs=[user_input, direct_prompt])
+
     res_category.change(
         fn=update_resolution_choices,
         inputs=[res_category],
         outputs=[resolution],
     )
 
-    # 发送消息 → Grok 生成 prompt → 自动生成图片
+    # Chat 模式：发送消息 → Grok 生成 prompt → 自动生成图片
     send_btn.click(
         fn=chat_and_generate,
         inputs=[user_input, chatbot, res_category, resolution, seed, random_seed, steps],
         outputs=[chatbot, output_image, seed_used, user_input],
     )
 
-    # 支持回车发送
+    # Chat 模式：支持回车发送
     user_input.submit(
         fn=chat_and_generate,
         inputs=[user_input, chatbot, res_category, resolution, seed, random_seed, steps],
         outputs=[chatbot, output_image, seed_used, user_input],
     )
 
-    # 清空对话
+    # Chat 模式：清空对话
     clear_btn.click(
         fn=clear_chat,
         outputs=[chatbot, output_image, seed_used],
+    )
+
+    # 直接模式：生成图片
+    direct_generate_btn.click(
+        fn=direct_generate,
+        inputs=[direct_prompt, res_category, resolution, seed, random_seed, steps],
+        outputs=[output_image, seed_used],
+    )
+
+    # 直接模式：支持回车生成
+    direct_prompt.submit(
+        fn=direct_generate,
+        inputs=[direct_prompt, res_category, resolution, seed, random_seed, steps],
+        outputs=[output_image, seed_used],
     )
 
     # 编辑消息后重新生成

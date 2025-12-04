@@ -18,6 +18,11 @@ class GrokClient:
         self.history = []
 
     @property
+    def available(self) -> bool:
+        """检查 API key 是否已配置"""
+        return bool(os.environ.get("XAI_API_KEY"))
+
+    @property
     def client(self):
         if self._client is None:
 
