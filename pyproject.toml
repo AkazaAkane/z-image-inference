@@ -15,4 +15,6 @@ dependencies = [
     "requests",
     "openai",
     "python-dotenv",
+    "gradio-i18n>=0.0.3",
+    "pyyaml",
 ]

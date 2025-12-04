@@ -1,0 +1,127 @@
+en:
+  # App
+  app_title: "# Z-Image-Turbo"
+  app_subtitle: "*An Efficient Image Generation Foundation Model with Single-Stream Diffusion Transformer*"
+
+  # Tabs
+  tab_generate: "Generate"
+  tab_history: "History"
+  tab_chat_mode: "Chat Mode"
+  tab_chat_mode_disabled: "Chat Mode (API Key not configured)"
+  tab_direct_input: "Direct Input Prompt"
+
+  # Chat mode
+  chatbot_label: "Chat (double-click user message to edit)"
+  chat_placeholder: "Describe the image you want..."
+  btn_send: "Send"
+  btn_clear_chat: "Clear Chat"
+
+  # Direct mode
+  direct_prompt_label: "Prompt"
+  direct_prompt_placeholder: "Enter complete image generation prompt..."
+  btn_generate: "Generate Image"
+
+  # Settings
+  resolution_category_label: "Resolution Category"
+  resolution_label: "Resolution"
+  seed_label: "Seed"
+  random_seed_label: "Random Seed"
+  steps_label: "Steps"
+
+  # Examples
+  examples_title: "### Examples (click to fill input)"
+
+  # Output
+  generated_image_label: "Generated Image"
+  seed_used_label: "Seed Used"
+
+  # History
+  btn_clear_all_history: "Clear All History"
+  history_gallery_label: "History"
+  preview_label: "Preview"
+  info_label: "Info"
+  prompt_label: "Prompt"
+  btn_delete: "Delete This Image"
+
+  # Status
+  status_generating_prompt: "Generating prompt..."
+  status_generating_image: "Generating image..."
+
+  # Messages
+  error_model_not_started: "Model server not started. Please run: uv run python model_server.py"
+  error_request_failed: "Request failed: {error}"
+  error_grok_api: "Grok API error: {error}"
+  warning_select_image: "Please select an image to delete first"
+  info_image_deleted: "Image deleted"
+  info_history_cleared: "All history cleared"
+
+  # Dynamic
+  history_seed_caption: "seed: {seed}"
+  history_info: "Seed: {seed}  |  {width}x{height}  |  Steps: {steps}"
+
+  # UI
+  language_label: "Language"
+
+zh:
+  # App
+  app_title: "# Z-Image-Turbo"
+  app_subtitle: "*高效的单流扩散Transformer图像生成基础模型*"
+
+  # Tabs
+  tab_generate: "生成"
+  tab_history: "历史记录"
+  tab_chat_mode: "Chat 模式"
+  tab_chat_mode_disabled: "Chat 模式（未配置 API Key）"
+  tab_direct_input: "直接输入 Prompt"
+
+  # Chat mode
+  chatbot_label: "对话（双击用户消息可编辑）"
+  chat_placeholder: "描述你想要的图片..."
+  btn_send: "发送"
+  btn_clear_chat: "清空对话"
+
+  # Direct mode
+  direct_prompt_label: "Prompt"
+  direct_prompt_placeholder: "输入完整的图片生成 prompt..."
+  btn_generate: "生成图片"
+
+  # Settings
+  resolution_category_label: "分辨率类别"
+  resolution_label: "分辨率"
+  seed_label: "种子"
+  random_seed_label: "随机种子"
+  steps_label: "步数"
+
+  # Examples
+  examples_title: "### 示例 (点击填入输入框)"
+
+  # Output
+  generated_image_label: "生成的图片"
+  seed_used_label: "使用的种子"
+
+  # History
+  btn_clear_all_history: "清空全部历史"
+  history_gallery_label: "历史记录"
+  preview_label: "预览"
+  info_label: "信息"
+  prompt_label: "Prompt"
+  btn_delete: "删除此图"
+
+  # Status
+  status_generating_prompt: "生成提示词中..."
+  status_generating_image: "生成图片中..."
+
+  # Messages
+  error_model_not_started: "模型服务未启动，请先运行: uv run python model_server.py"
+  error_request_failed: "请求失败: {error}"
+  error_grok_api: "Grok API 错误: {error}"
+  warning_select_image: "请先选择要删除的图片"
+  info_image_deleted: "图片已删除"
+  info_history_cleared: "已清空所有历史记录"
+
+  # Dynamic
+  history_seed_caption: "seed: {seed}"
+  history_info: "Seed: {seed}  |  {width}x{height}  |  Steps: {steps}"
+
+  # UI
+  language_label: "语言"
