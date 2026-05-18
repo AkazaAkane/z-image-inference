@@ -19,18 +19,35 @@ def load_model():
     global pipe
     if pipe is None:
         print("Loading model...")
+        # 1. 基础加载
         pipe = ZImagePipeline.from_pretrained(
             "Tongyi-MAI/Z-Image-Turbo",
-            dtype=torch.bfloat16,
-            low_cpu_mem_usage=False,
+            low_cpu_mem_usage=True
         )
-        # VAE 用 float32 避免 bfloat16 导致的 NaN 问题
-        pipe.vae.to(dtype=torch.float32)
-        pipe.vae.config.force_upcast = True
+        
+        # 2. 针对 Mac M4 优化精度和设备
+        # 使用 bfloat16 能极大缓解黑屏问题
+        print("Moving model to MPS with torch.bfloat16...")
+        pipe.to(device="mps", dtype=torch.bfloat16) 
+        
+        # 3. 优化 VAE：这是防止黑屏的关键。
+        # 虽然去掉了 tiling，但 VAE 强制转 float32 必须保留
+        pipe.vae.to(device="mps", dtype=torch.float32)
+        
+        # 4. 禁用安全检查（解决你之前的 NSFW 报错）
+        if hasattr(pipe, "safety_checker"):
+            pipe.safety_checker = None
+            pipe.requires_safety_checker = False
+        
+        # 注意：这里删掉了报错的 enable_vae_tiling()
+        # 如果你担心显存，可以尝试保留下面这一行（通常 ZImagePipeline 支持）
+        try:
+            pipe.enable_attention_slicing()
+        except:
+            pass
 
-        pipe.to(torch.device("mps"))
-        pipe.enable_attention_slicing()
-        print("Model loaded!")
+        print("Model loaded on M4 GPU (MPS)!")
+
     return pipe
 
 
@@ -60,14 +77,20 @@ class GenerateResponse(BaseModel):
 def generate(req: GenerateRequest):
     model = load_model()
 
-    # MPS 的 Generator 放在 CPU 上更稳定
-    generator = torch.Generator("cpu").manual_seed(req.seed)
+    # 将 seed 处理好
+    seed = req.seed if req.seed != -1 else torch.seed()
+    generator = torch.Generator("cpu").manual_seed(seed)
+
+    # 【重要】默认分辨率先设小一点测试，比如 512
+    width = req.width if req.width > 0 else 512
+    height = req.height if req.height > 0 else 512
 
     with torch.inference_mode():
+        # 【核心改动 4】确保 guidance_scale 为 0.0 是该模型的要求
         image = model(
             prompt=req.prompt,
-            height=req.height,
-            width=req.width,
+            height=height,
+            width=width,
             num_inference_steps=req.steps,
             guidance_scale=0.0,
             max_sequence_length=512,

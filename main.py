@@ -1,3 +1,4 @@
+# /z-image-inference/main.py
 import io
 import base64
 import random
@@ -187,7 +188,7 @@ def generate_image_internal(prompt, res_category, resolution, seed, random_seed,
                 "steps": int(steps),
                 "seed": seed,
             },
-            timeout=300,
+            timeout=3000,
         )
         resp.raise_for_status()
     except requests.exceptions.ConnectionError:
@@ -326,6 +327,7 @@ def fill_example(example_text):
 
 def get_history_gallery():
     """返回 history tab 的 gallery 数据"""
+    load_history()
     return [(d["image"], get_text("history_seed_caption", current_lang, seed=d['seed'])) for d in history_detail]
 
 
